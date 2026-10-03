@@ -4,8 +4,8 @@ Training & Evaluation Script
 This script:
     1. Loads the product pair dataset
     2. Generates embeddings using the Sentence Transformer
-    3. Evaluates the model using standard ML metrics
-    4. Finds the OPTIMAL threshold (the cutoff score for MATCH vs NO MATCH)
+    3. Calibrates thresholds on a separate stratified split
+    4. Evaluates baseline and attribute guard with frozen thresholds
     5. Saves the best threshold to disk
 
 Run this script first before using the demo.
@@ -32,7 +32,6 @@ from sklearn.model_selection import train_test_split
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.dataset_builder import build_dataframe
-from models.siamese_model import EntityResolutionModel
 
 
 def find_optimal_threshold(similarities: np.ndarray, labels: np.ndarray) -> float:
@@ -67,60 +66,51 @@ def find_optimal_threshold(similarities: np.ndarray, labels: np.ndarray) -> floa
     return round(float(best_threshold), 2)
 
 
-def evaluate(model: EntityResolutionModel, df: pd.DataFrame, threshold: float) -> dict:
+def evaluate(model, df: pd.DataFrame, threshold: float = 0.75) -> dict:
+    """Calibrate on one split; report frozen thresholds on held-out pairs.
+
+    This small pair-level split is a demonstration, not product-disjoint validation.
     """
-    Runs model predictions on the full dataset and prints a performance report.
-    
-    Metrics explained:
-        Precision: Of all pairs we predicted as MATCH, how many truly were?
-        Recall:    Of all true matches, how many did we catch?
-        F1 Score:  Harmonic mean of precision and recall (balanced metric)
-        AUC-ROC:   Overall ability to separate matches from non-matches (0.5=random, 1.0=perfect)
-    """
-    print("\n" + "="*60)
-    print("EVALUATING MODEL")
-    print("="*60)
+    calibration, test = train_test_split(
+        df, test_size=0.4, random_state=42, stratify=df["label"]
+    )
+    def scores(frame):
+        pairs = list(zip(frame["title1"], frame["title2"]))
+        results = model.predict_batch(pairs)
+        return {key: np.array([r[key] for r in results])
+                for key in ("raw_similarity", "final_score")}
 
-    # Step 1: Encode all titles
-    print("Generating embeddings...")
-    emb1 = model.encode(df["title1"].tolist())
-    emb2 = model.encode(df["title2"].tolist())
-
-    # Step 2: Compute similarity scores for every pair
-    similarities = np.array([
-        cosine_similarity([emb1[i]], [emb2[i]])[0][0]
-        for i in range(len(df))
-    ])
-
-    labels = df["label"].values
-
-    # Step 3: Find optimal threshold
-    optimal_threshold = find_optimal_threshold(similarities, labels)
-    print(f"\nOptimal threshold found: {optimal_threshold}")
-    print(f"(Using this instead of default {threshold})")
-
-    # Step 4: Make predictions with optimal threshold
-    predictions = (similarities >= optimal_threshold).astype(int)
-
-    # Step 5: Print full report
-    print("\nClassification Report:")
-    print("-" * 40)
-    print(classification_report(labels, predictions, target_names=["NO MATCH", "MATCH"]))
-
-    print("Confusion Matrix:")
-    print("-" * 40)
-    cm = confusion_matrix(labels, predictions)
-    print(f"              Predicted NO MATCH  |  Predicted MATCH")
-    print(f"Actual NO MATCH:      {cm[0][0]:>4}        |      {cm[0][1]:>4}")
-    print(f"Actual MATCH:         {cm[1][0]:>4}        |      {cm[1][1]:>4}")
-
-    auc = roc_auc_score(labels, similarities)
-    print(f"\nAUC-ROC Score: {auc:.4f}  (1.0 = perfect, 0.5 = random guessing)")
-
-    return {"optimal_threshold": optimal_threshold, "auc_roc": auc}
+    calibration_scores = scores(calibration)
+    frozen = {key: find_optimal_threshold(values, calibration["label"].to_numpy())
+              for key, values in calibration_scores.items()}
+    test_scores = scores(test)
+    labels = test["label"].to_numpy()
+    report = {"random_state": 42, "calibration_pairs": len(calibration),
+              "test_pairs": len(test), "calibration_indices": calibration.index.tolist(),
+              "test_indices": test.index.tolist(), "models": {}}
+    for name, key in (("semantic_baseline", "raw_similarity"),
+                      ("attribute_guard", "final_score")):
+        predictions = (test_scores[key] >= frozen[key]).astype(int)
+        metrics = classification_report(labels, predictions, labels=[0, 1],
+                                        target_names=["NO MATCH", "MATCH"],
+                                        output_dict=True, zero_division=0)
+        report["models"][name] = {
+            "threshold": frozen[key], "classification_report": metrics,
+            "confusion_matrix": confusion_matrix(labels, predictions, labels=[0, 1]).tolist(),
+            "auc_roc": float(roc_auc_score(labels, test_scores[key]))}
+        print(f"{name}: threshold calibrated on {len(calibration)} pairs; "
+              f"evaluated on {len(test)} held-out pairs")
+        print(classification_report(labels, predictions, labels=[0, 1],
+                                    target_names=["NO MATCH", "MATCH"], zero_division=0))
+    os.makedirs("results", exist_ok=True)
+    with open("results/evaluation.json", "w") as handle:
+        json.dump(report, handle, indent=2)
+    return {"optimal_threshold": frozen["final_score"],
+            "auc_roc": report["models"]["attribute_guard"]["auc_roc"],
+            "report": report}
 
 
-def run_example_predictions(model: EntityResolutionModel, threshold: float):
+def run_example_predictions(model, threshold: float):
     """
     Shows the model working on brand new examples it has never seen.
     This is what you'd demo in an interview.
@@ -156,6 +146,8 @@ def main():
     print("Building dataset...")
     df = build_dataframe()
     print(f"Dataset: {len(df)} pairs ({df['label'].sum()} matches, {(df['label']==0).sum()} non-matches)")
+
+    from models.siamese_model import EntityResolutionModel
 
     # 2. Load model (downloads ~90MB model on first run)
     model = EntityResolutionModel(threshold=0.75)

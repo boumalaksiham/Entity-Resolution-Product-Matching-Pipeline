@@ -1,4 +1,9 @@
 # Entity Resolution — Product Matching Pipeline
+
+## Evaluation scope
+
+The historical 78% to 92%+ claim below is not a verified held-out result. The original evaluation tuned the threshold on the same 40 curated pairs it scored and evaluated raw similarity without applying the attribute guard. The revised script calibrates thresholds on a separate split, evaluates both raw and guarded scores on held-out pairs, and writes a machine-readable report. Run it to obtain new results; the historical numbers must not be used as the revised experiment's results. Pair-level splitting still allows related products in both splits, so a larger product-disjoint benchmark remains necessary.
+
 ### Semantic Similarity + Attribute Conflict Detection
 
 > Built as part of an e-commerce ML portfolio targeting applied research roles at companies like eBay, Amazon, and Shopify.
@@ -88,7 +93,7 @@ For structured numerical attributes, regex is faster, more reliable, and perfect
 | AirPods Pro 2nd Gen vs airpods pro 2 | 0.88 | 1.00 | 0.88 | ✅ MATCH | ✅ |
 | Dyson V15 vs dyson v15 detect hoover | 0.93 | 1.00 | 0.93 | ✅ MATCH | ✅ |
 
-**Overall accuracy on 40-pair evaluation set: 78% (baseline) → 92%+ after attribute guard**
+**Historical demonstration claim (not independently validated): 78% baseline → 92%+ with attribute guard. See Evaluation scope above; rerun the revised script for held-out results.**
 
 ---
 
@@ -121,8 +126,8 @@ entity_resolution/
 ### Installation
 ```bash
 # Clone and navigate to project
-git clone <repo-url>
-cd entity_resolution
+git clone https://github.com/boumalaksiham/Entity-Resolution-Product-Matching-Pipeline.git
+cd Entity-Resolution-Product-Matching-Pipeline
 
 # Create virtual environment
 python3 -m venv venv
@@ -139,7 +144,7 @@ pip install "numpy<2" torch==2.2.2 transformers==4.40.0 \
 ```bash
 python train_evaluate.py
 ```
-Outputs classification report, confusion matrix, AUC-ROC, and optimal threshold.
+Calibrates baseline and guarded-score thresholds on 24 pairs and evaluates frozen thresholds on 16 held-out pairs. Writes results/evaluation.json with metrics and split indices. This small pair-level split is not a product-disjoint benchmark.
 
 ### Run Interactive Demo
 ```bash
@@ -205,3 +210,6 @@ For a production-grade version of this system, the next steps would be training 
 ---
 
 *This project is part of a 4-project ML portfolio covering Entity Resolution, Hierarchical Taxonomy Classification, Named Entity Recognition, and Image Quality Scoring for e-commerce applications.*
+## Evaluation regression check
+
+Run `python -m unittest discover -s tests -v` from the repository root. The check uses a fake scorer to verify split separation and application of guarded scores; it does not download a model or claim model performance.
