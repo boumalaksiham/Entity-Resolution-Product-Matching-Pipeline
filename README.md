@@ -2,6 +2,14 @@
 
 A product-title matching prototype that combines sentence embeddings with explicit checks for conflicting product attributes. Similar wording alone can hide differences such as model number, capacity, storage, or generation.
 
+## A concrete matching problem
+
+`Apple iPhone 14 Pro 256GB Deep Purple` and `Apple iPhone 14 Pro 512GB Deep Purple` describe closely related products, but different storage variants. The interactive demo includes this pair to expose a limitation of semantic similarity alone.
+
+The guard checks attributes only when both titles provide values. An explicit storage conflict multiplies the score by **0.40**; other detected conflicts can reduce it further. Missing attributes are not proof of agreement. Inspect the raw similarity, extracted conflicts, multiplier, and final score together when reviewing a decision.
+
+**Design choice:** retain a pretrained semantic encoder for wording differences and add inspectable rules for selected identifiers. This makes the source of a score reduction visible, while introducing dependence on regex coverage and manually chosen penalties.
+
 ## Method
 
 1. Encode both titles with `all-MiniLM-L6-v2`.
